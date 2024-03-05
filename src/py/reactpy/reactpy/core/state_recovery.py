@@ -68,7 +68,7 @@ class StateRecoveryManager:
         self._object_to_type_id = {}
         self._type_id_to_object = {}
         for idx, typ in enumerate(
-            (None, bool, str, int, float, list, tuple, UUID, *serializable_types)
+            (None, bool, str, int, float, list, tuple, UUID, datetime.timezone, datetime.timedelta, *serializable_types)
         ):
             idx_as_bytes = str(idx).encode("utf-8")
             self._object_to_type_id[typ] = idx_as_bytes
