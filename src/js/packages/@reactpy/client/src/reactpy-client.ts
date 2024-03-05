@@ -344,7 +344,7 @@ export class SimpleReactPyClient
     this.shouldReconnect = true;
 
     window.setTimeout(() => {
-      if (!this.didReconnectingCallback && this.reconnectingCallback) {
+      if (!this.didReconnectingCallback && this.reconnectingCallback && maxRetries != connectionAttemptsRemaining) {
         this.didReconnectingCallback = true;
         this.reconnectingCallback();
       }
