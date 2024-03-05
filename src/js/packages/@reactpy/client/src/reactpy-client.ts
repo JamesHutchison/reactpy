@@ -247,7 +247,7 @@ export class SimpleReactPyClient
       display: flex;
       justify-content: center;
       align-items: center;
-      z-index: 1000;
+      z-index: 100000;
     `;
 
     pipeContainer.style.cssText = `
