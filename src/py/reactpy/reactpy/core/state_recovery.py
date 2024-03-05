@@ -136,7 +136,12 @@ class StateRecoverySerializer:
         self._max_object_length = max_object_length
         self._max_num_state_objects = max_num_state_objects
         self._provided_default_serializer = default_serializer
-        self._deserializer_map = deserializer_map or {}
+        deserialization_map = {
+            datetime.timezone: lambda x: datetime.timezone(
+                datetime.timedelta(**x["offset"]), x["name"]
+            ),
+        }
+        self._deserializer_map = deserialization_map | (deserializer_map or {})
 
     def _get_otp_code(self, target_time: float) -> str:
         at = self._totp.at
