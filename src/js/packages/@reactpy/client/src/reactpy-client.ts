@@ -373,6 +373,8 @@ export class SimpleReactPyClient
       if (!this.didReconnectingCallback && this.reconnectingCallback && maxRetries != connectionAttemptsRemaining) {
         this.didReconnectingCallback = true;
         this.reconnectingCallback();
+      } else if (!this.sleeping) {
+        this.isReconnecting = true;
       }
 
       if (maxRetries < connectionAttemptsRemaining)
