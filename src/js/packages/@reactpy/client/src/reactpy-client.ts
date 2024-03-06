@@ -373,8 +373,6 @@ export class SimpleReactPyClient
       if (!this.didReconnectingCallback && this.reconnectingCallback && maxRetries != connectionAttemptsRemaining) {
         this.didReconnectingCallback = true;
         this.reconnectingCallback();
-      } else if (!this.sleeping) {
-        this.isReconnecting = true;
       }
 
       if (maxRetries < connectionAttemptsRemaining)
@@ -398,10 +396,11 @@ export class SimpleReactPyClient
           if (Date.now() - lastAttempt > maxInterval * 2) {
             interval = 750;
             connectionAttemptsRemaining = maxRetries;
+          } else if (!this.sleeping) {
+            this.isReconnecting = true;
           }
           lastAttempt = Date.now()
           this.shouldReconnect = false;
-          this.isReconnecting = true;
           this.isReady = false;
           if (this.socketLoopIntervalId)
             clearInterval(this.socketLoopIntervalId);
