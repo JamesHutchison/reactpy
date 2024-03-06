@@ -177,6 +177,7 @@ export class SimpleReactPyClient
   private reconnectingCallback: () => void;
   private reconnectedCallback: () => void;
   private didReconnectingCallback: boolean;
+  private willReconnect: boolean;
 
   constructor(props: SimpleReactPyClientProps) {
     super();
@@ -195,6 +196,7 @@ export class SimpleReactPyClient
     this.debugMessages = props.debugMessages || false;
     this.sleeping = false;
     this.isReconnecting = false;
+    this.willReconnect = false;
     this.isReady = false
     this.salt = "";
     this.shouldReconnect = false;
@@ -292,7 +294,7 @@ export class SimpleReactPyClient
   }
 
   indicateReconnect(): void {
-    const isReconnecting = this.isReconnecting ? "yes" : "no";
+    const isReconnecting = this.willReconnect ? "yes" : "no";
     this.sendMessage({ "type": messageTypes.reconnectingCheck, "value": isReconnecting }, true)
   }
 
@@ -388,11 +390,12 @@ export class SimpleReactPyClient
             this.reconnectedCallback();
             this.didReconnectingCallback = false;
           }
+          this.willReconnect = true;
           if (onOpen)
             onOpen();
         },
         onClose: () => {
-          // reset retry interval
+          // reset retry interval on successful connection
           if (Date.now() - lastAttempt > maxInterval * 2) {
             interval = 750;
             connectionAttemptsRemaining = maxRetries;
