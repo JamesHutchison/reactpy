@@ -211,6 +211,7 @@ export class SimpleReactPyClient
     this.onMessage(messageTypes.layoutUpdate, (msg) => {
       this.updateClientState(msg.state_vars);
       this.invokeLayoutUpdateHandlers(msg.path, msg.model);
+      this.willReconnect = true;  // don't indicate a reconnect until at least one successful layout update
     })
 
     this.reconnect()
@@ -390,7 +391,6 @@ export class SimpleReactPyClient
             this.reconnectedCallback();
             this.didReconnectingCallback = false;
           }
-          this.willReconnect = true;
           if (onOpen)
             onOpen();
         },
