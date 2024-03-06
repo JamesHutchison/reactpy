@@ -145,8 +145,8 @@ type ReconnectProps = {
   maxRetries?: number;
   backoffRate?: number;
   intervalJitter?: number;
-  reconnectingCallback?: Function;
-  reconnectedCallback?: Function;
+  reconnectingCallback?: () => void;
+  reconnectedCallback?: () => void;
 };
 
 enum messageTypes {
@@ -174,8 +174,8 @@ export class SimpleReactPyClient
   private salt: string;
   private shouldReconnect: boolean;
   private connectionTimeout: number;
-  private reconnectingCallback: Function;
-  private reconnectedCallback: Function;
+  private reconnectingCallback: () => void;
+  private reconnectedCallback: () => void;
   private didReconnectingCallback: boolean;
 
   constructor(props: SimpleReactPyClientProps) {
@@ -338,6 +338,7 @@ export class SimpleReactPyClient
       if (this.socket.current && this.socket.current.readyState === WebSocket.OPEN) {
         logger.warn("Closing socket connection due to idle activity");
         this.sleeping = true;
+        this.isReconnecting = false;
         this.socket.current.close();
       }
     }
