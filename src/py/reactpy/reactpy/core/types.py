@@ -263,6 +263,16 @@ class LayoutEventMessage(TypedDict):
     """A list of event data passed to the event handler."""
 
 
+class PingIntervalSetMessage(TypedDict):
+    type: Literal["ping-interval-set"]
+
+    ping_interval: int
+
+
+class AckMessage(TypedDict):
+    type: Literal["ack-message"]
+
+
 class Context(Protocol[_Type]):
     """Returns a :class:`ContextProvider` component"""
 

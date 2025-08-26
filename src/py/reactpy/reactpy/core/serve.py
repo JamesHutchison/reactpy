@@ -4,6 +4,7 @@ import random
 import string
 from collections.abc import Awaitable
 from logging import getLogger
+from os import environ
 from typing import Callable
 from warnings import warn
 
@@ -17,17 +18,32 @@ from reactpy.core._life_cycle_hook import clear_hook_state, create_hook_state
 from reactpy.core.layout import Layout
 from reactpy.core.state_recovery import StateRecoveryFailureError, StateRecoveryManager
 from reactpy.core.types import (
+    AckMessage,
     ClientStateMessage,
     IsReadyMessage,
     LayoutEventMessage,
     LayoutType,
     LayoutUpdateMessage,
+    PingIntervalSetMessage,
     ReconnectingCheckMessage,
     RootComponentConstructor,
 )
 
 logger = getLogger(__name__)
 
+MAX_HOT_RELOADING = environ.get("REACTPY_MAX_HOT_RELOADING", "0") in (
+    "1",
+    "true",
+    "True",
+    "yes",
+)
+if MAX_HOT_RELOADING:
+    logger.warning("Doing maximum hot reloading")
+    from reactpy.hot_reloading import (
+        monkeypatch_jurigged_to_kill_connections_if_function_update,
+    )
+
+    monkeypatch_jurigged_to_kill_connections_if_function_update()
 
 SendCoroutine = Callable[
     [
@@ -110,8 +126,9 @@ async def _single_incoming_loop(
     while True:
         # We need to fire and forget here so that we avoid waiting on the completion
         # of this event handler before receiving and running the next one.
-        task_group.start_soon(layout.deliver, await recv())
 
+        task_group.start_soon(layout.deliver, await recv())
+        task_group.start_soon(send, AckMessage(type="ack"))
 
 class WebsocketServer:
     def __init__(
@@ -128,24 +145,35 @@ class WebsocketServer:
     async def handle_connection(
         self, connection: Connection, constructor: RootComponentConstructor
     ):
+        if MAX_HOT_RELOADING:
+            from reactpy.hot_reloading import active_connections
+
+            active_connections.append(connection)
         layout = Layout(
             ConnectionContext(
                 constructor(),
                 value=connection,
             ),
         )
-        async with layout:
-            await self._handshake(layout)
-            # salt may be set to client's old salt during handshake
-            if self._state_recovery_manager:
-                layout.set_recovery_serializer(
-                    self._state_recovery_manager.create_serializer(self._salt)
+        try:
+            async with layout:
+                await self._handshake(layout)
+                # salt may be set to client's old salt during handshake
+                if self._state_recovery_manager:
+                    layout.set_recovery_serializer(
+                        self._state_recovery_manager.create_serializer(self._salt)
+                    )
+                await serve_layout(
+                    layout,
+                    self._send,
+                    self._recv,
                 )
-            await serve_layout(
-                layout,
-                self._send,
-                self._recv,
-            )
+        finally:
+            if MAX_HOT_RELOADING:
+                try:
+                    active_connections.remove(connection)
+                except ValueError:
+                    pass
 
     async def _handshake(self, layout: Layout) -> None:
         await self._send(ReconnectingCheckMessage(type="reconnecting-check"))
@@ -172,7 +200,21 @@ class WebsocketServer:
         await self._indicate_ready(),
 
     async def _indicate_ready(self) -> None:
+        if MAX_HOT_RELOADING:
+            await self._send(
+                PingIntervalSetMessage(type="ping-interval-set", ping_interval=250)
+            )
         await self._send(IsReadyMessage(type="is-ready", salt=self._salt))
+
+    if MAX_HOT_RELOADING:
+
+        async def _handle_rebuild_msg(self, msg: LayoutUpdateMessage) -> None:
+            await self._send(msg)
+
+    else:
+
+        async def _handle_rebuild_msg(self, msg: LayoutUpdateMessage) -> None:
+            pass  # do nothing
 
     async def _do_state_rebuild_for_reconnection(self, layout: Layout) -> str:
         salt = self._salt
@@ -197,7 +239,8 @@ class WebsocketServer:
 
             salt = client_state_msg["salt"]
             layout.start_rendering_for_reconnect()
-            await layout.render_until_queue_empty()
+            async for msg in layout.render_until_queue_empty():
+                await self._handle_rebuild_msg(msg)
         except StateRecoveryFailureError:
             logger.warning(
                 "State recovery failed (likely client from different version). Starting fresh"

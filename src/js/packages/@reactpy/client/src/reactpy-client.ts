@@ -1,5 +1,5 @@
-import { ReactPyModule } from "./reactpy-vdom";
 import logger from "./logger";
+import { ReactPyModule } from "./reactpy-vdom";
 
 /**
  * A client for communicating with a ReactPy server.
@@ -108,6 +108,7 @@ export type SimpleReactPyClientProps = {
   connectionTimeout?: number;
   debugMessages?: boolean;
   socketLoopThrottle?: number;
+  pingInterval?: number;
 };
 
 /**
@@ -156,12 +157,14 @@ enum messageTypes {
   clientState = "client-state",
   stateUpdate = "state-update",
   layoutUpdate = "layout-update",
+  pingIntervalSet = "ping-interval-set",
+  ackMessage = "ack"
 };
 
 export class SimpleReactPyClient
   extends BaseReactPyClient
   implements ReactPyClient {
-  private readonly urls: ServerUrls;
+  private urls: ServerUrls;
   private socket!: { current?: WebSocket };
   private idleDisconnectTimeMillis: number;
   private lastActivityTime: number;
@@ -180,6 +183,9 @@ export class SimpleReactPyClient
   private didReconnectingCallback: boolean;
   private willReconnect: boolean;
   private socketLoopThrottle: number;
+  private pingPongIntervalId?: number | null;
+  private pingInterval: number;
+  private messageResponseTimeoutId?: number | null;
 
   constructor(props: SimpleReactPyClientProps) {
     super();
@@ -193,6 +199,7 @@ export class SimpleReactPyClient
     );
     this.idleDisconnectTimeMillis = (props.idleDisconnectTimeSeconds || 240) * 1000;
     this.connectionTimeout = props.connectionTimeout || 5000;
+    this.pingInterval = props.pingInterval || 0;
     this.lastActivityTime = Date.now()
     this.reconnectOptions = props.reconnectOptions
     this.debugMessages = props.debugMessages || false;
@@ -215,8 +222,10 @@ export class SimpleReactPyClient
       this.updateClientState(msg.state_vars);
       this.invokeLayoutUpdateHandlers(msg.path, msg.model);
       this.willReconnect = true;  // don't indicate a reconnect until at least one successful layout update
-    })
-
+    });
+    this.onMessage(messageTypes.pingIntervalSet, (msg) => { this.pingInterval = msg.ping_interval; this.updatePingInterval(); });
+    this.onMessage(messageTypes.ackMessage, () => {})
+    this.updatePingInterval()
     this.reconnect()
 
     const handleUserAction = (ev: any) => {
@@ -334,7 +343,19 @@ export class SimpleReactPyClient
       }
       this.lastActivityTime = Date.now();
       this.socket.current.send(JSON.stringify(message));
+
+      // Start response timeout for reconnecting grayout
+      if (this.messageResponseTimeoutId) {
+        window.clearTimeout(this.messageResponseTimeoutId);
+      }
+      this.messageResponseTimeoutId = window.setTimeout(() => {
+        this.showReconnectingGrayout();
+      }, 800);
     }
+  }
+
+  protected handleIncoming(message: any): void {
+    super.handleIncoming(message);
   }
 
   idleTimeoutCheck(): void {
@@ -350,11 +371,20 @@ export class SimpleReactPyClient
     }
   }
 
+  updatePingInterval(): void {
+    if (this.pingPongIntervalId) {
+      window.clearInterval(this.pingPongIntervalId);
+    }
+    if (this.pingInterval) {
+      this.pingPongIntervalId = window.setInterval(() => { this.socket.current?.readyState === WebSocket.OPEN && this.socket.current?.send("ping") }, this.pingInterval);
+    }
+  }
+
   reconnect(onOpen?: () => void, interval: number = 750, connectionAttemptsRemaining: number = 20, lastAttempt: number = 0): void {
     const intervalJitter = this.reconnectOptions?.intervalJitter || 0.5;
     const backoffRate = this.reconnectOptions?.backoffRate || 1.2;
-    const maxInterval = this.reconnectOptions?.maxInterval || 20000;
-    const maxRetries = this.reconnectOptions?.maxRetries || 20;
+    const maxInterval = this.reconnectOptions?.maxInterval || 500;
+    const maxRetries = this.reconnectOptions?.maxRetries || 40;
 
     if (this.layoutUpdateHandlers.length == 0) {
       setTimeout(() => { this.reconnect(onOpen, interval, connectionAttemptsRemaining, lastAttempt); }, 10);
@@ -374,6 +404,14 @@ export class SimpleReactPyClient
     }
     lastAttempt = lastAttempt || Date.now();
     this.shouldReconnect = true;
+
+    this.urls = getServerUrls(
+      {
+        url: document.location.origin,
+        route: document.location.pathname,
+        query: document.location.search,
+      },
+    );
 
     window.setTimeout(() => {
       if (!this.didReconnectingCallback && this.reconnectingCallback && maxRetries != connectionAttemptsRemaining) {
@@ -412,6 +450,8 @@ export class SimpleReactPyClient
             clearInterval(this.socketLoopIntervalId);
           if (this.idleCheckIntervalId)
             clearInterval(this.idleCheckIntervalId);
+          if (this.pingPongIntervalId)
+            clearInterval(this.pingPongIntervalId);
           if (!this.sleeping) {
             const thisInterval = nextInterval(addJitter(interval, intervalJitter), backoffRate, maxInterval);
             const newRetriesRemaining = connectionAttemptsRemaining - 1;
@@ -421,7 +461,15 @@ export class SimpleReactPyClient
             this.reconnect(onOpen, thisInterval, newRetriesRemaining, lastAttempt);
           }
         },
-        onMessage: async ({ data }) => { this.lastActivityTime = Date.now(); this.handleIncoming(JSON.parse(data)) },
+        onMessage: async ({ data }) => {
+          this.lastActivityTime = Date.now();
+          if (this.messageResponseTimeoutId) {
+            window.clearTimeout(this.messageResponseTimeoutId);
+            this.messageResponseTimeoutId = null;
+            this.hideReconnectingGrayout();
+          }
+          this.handleIncoming(JSON.parse(data));
+        },
         ...this.reconnectOptions,
       });
       this.socketLoopIntervalId = window.setInterval(() => { this.socketLoop() }, this.socketLoopThrottle);

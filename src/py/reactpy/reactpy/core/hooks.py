@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from functools import lru_cache
 import hashlib
+import linecache
 import sys
 from collections.abc import Coroutine, Sequence
 from hashlib import md5
@@ -22,7 +23,7 @@ from typing import (
 from typing_extensions import TypeAlias
 
 from reactpy.config import REACTPY_DEBUG_MODE
-from reactpy.core._life_cycle_hook import get_current_hook
+from reactpy.core._life_cycle_hook import LifeCycleHook, get_current_hook
 from reactpy.core.state_recovery import StateRecoveryFailureError
 from reactpy.core.types import Context, Key, State, VdomDict
 from reactpy.utils import Ref
@@ -54,7 +55,9 @@ _Type = TypeVar("_Type")
 
 
 @overload
-def use_state(initial_value: Callable[[], _Type], *, server_only: bool = False) -> State[_Type]: ...
+def use_state(
+    initial_value: Callable[[], _Type], *, server_only: bool = False
+) -> State[_Type]: ...
 
 
 @overload
@@ -75,8 +78,10 @@ def use_state(
     Returns:
         A tuple containing the current state and a function to update it.
     """
+    hook: LifeCycleHook | None
     if server_only:
         key = None
+        hook = None
     else:
         hook = get_current_hook()
         caller_info = get_caller_info()
@@ -89,6 +94,8 @@ def use_state(
                     f"Missing expected key {key} on client"
                 ) from err
     current_state = _use_const(lambda: _CurrentState(key, initial_value))
+    if hook:
+        hook.add_state_update(current_state)
     return State(current_state.value, current_state.dispatch)
 
 
@@ -100,8 +107,11 @@ def get_caller_info():
         patch_path = render_frame.f_locals.get("patch_path_for_state")
         if patch_path is not None:
             break
-    # Extract the relevant information: file path and line number and hash it
-    return f"{caller_frame.f_code.co_filename} {caller_frame.f_lineno} {patch_path}"
+    # Extract the relevant information: file path, line number, and line and hash it
+    filename = caller_frame.f_code.co_filename
+    lineno = caller_frame.f_lineno
+    line = linecache.getline(filename, lineno)
+    return f"{filename} {lineno} {line}, {patch_path}"
 
 
 __DEBUG_CALLER_INFO_TO_STATE_KEY = {}
@@ -190,12 +200,9 @@ def use_effect(
     hook = get_current_hook()
     if hook.reconnecting.current:
         if not isinstance(dependencies, ReconnectingOnly):
-            return
-        dependencies = None
-    else:
-        if isinstance(dependencies, ReconnectingOnly):
-            return
-        dependencies = _try_to_infer_closure_values(function, dependencies)
+            return memoize(lambda: None)
+    elif isinstance(dependencies, ReconnectingOnly):
+        return
 
     def add_effect(function: _EffectApplyFunc) -> None:
         if not asyncio.iscoroutinefunction(function):
